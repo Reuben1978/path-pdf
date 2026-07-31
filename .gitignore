@@ -1,0 +1,10 @@
+# PDFium binaries -- downloaded by scripts/fetch-pdfium.sh, not committed
+vendor/
+
+# Rust
+target/
+src-tauri/target/
+
+# Node
+node_modules/
+dist/
