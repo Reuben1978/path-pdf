@@ -1,0 +1,33 @@
+[package]
+name = "path-pdf"
+version = "0.1.0"
+description = "A fast, lightweight PDF viewer and light editor"
+authors = ["Solid Path Apps"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-dialog = "2"
+# Default features already include thread_safe (Mutex-guarded access, needed
+# since Tauri commands run off a thread pool) and image-crate interop (used
+# to pull RGBA bytes + dimensions out of a rendered page).
+pdfium-render = "0.8"
+thiserror = "2"
+# Same major.minor as pdfium-render's own "image_025" feature -- needed
+# directly (not just transitively) to decode uploaded signature PNG bytes
+# into the DynamicImage type PdfPageObjectsCommon::create_image_object expects.
+image = { version = "0.25", default-features = false, features = ["png"] }

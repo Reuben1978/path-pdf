@@ -8,3 +8,22 @@ src-tauri/target/
 # Node
 node_modules/
 dist/
+dist-ssr/
+
+# Logs
+logs
+*.log
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.local
+
+# Secrets / local config -- never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key

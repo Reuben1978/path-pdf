@@ -1,0 +1,59 @@
+:root {
+  /* Dark is this app's one default look (per explicit design direction),
+     not conditional on OS light/dark preference. */
+  --color-bg: #17151d;
+  --color-panel-bg: #1e1b26;
+  --color-text: #e8e6ed;
+  --color-text-dim: #9a95a8;
+  --color-border: #322e3d;
+  --color-canvas-bg: #0f0d13;
+  --color-thumb-bg: #f2f1f4;
+  --color-error: #f87171;
+  --color-accent: #3b82f6;
+
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+
+  font: 14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+#app {
+  height: 100%;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input::placeholder {
+  color: var(--color-text-dim);
+}

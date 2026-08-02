@@ -1,0 +1,88 @@
+use std::path::PathBuf;
+
+use pdfium_render::prelude::Pdfium;
+use tauri::Manager;
+
+mod commands;
+mod state;
+
+// Exposed (not just `mod`) so integration tests under tests/ can exercise
+// the PDF logic directly against tests/fixtures/, per CLAUDE.md's testing
+// section, without going through the Tauri command/IPC layer.
+pub mod error;
+pub mod pdf;
+
+use state::AppState;
+
+#[cfg(target_os = "windows")]
+const PDFIUM_TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+
+#[cfg(not(target_os = "windows"))]
+const PDFIUM_TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+
+/// Locates the PDFium dynamic library fetched by `scripts/fetch-pdfium.sh`.
+/// Only the dev layout (`vendor/pdfium/<triple>/`) is handled today; bundling
+/// PDFium into release builds via Tauri resources is a deliberate follow-up,
+/// once dev rendering is verified working end to end.
+fn pdfium_library_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("vendor")
+        .join("pdfium")
+        .join(PDFIUM_TARGET_TRIPLE)
+        .join(if cfg!(target_os = "windows") { "bin" } else { "lib" })
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+                &pdfium_library_dir(),
+            ))?;
+            // Leaked deliberately: PdfDocument borrows from the Pdfium instance
+            // that opened it, and this instance needs to outlive every document
+            // opened for the lifetime of the process. See state.rs.
+            let pdfium: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
+
+            // When launched via a file association (e.g. double-clicking a
+            // .pdf with this app set as the default handler), the OS passes
+            // the file path as the first CLI argument. `.exists()` guards
+            // against treating some unrelated flag as a path.
+            let initial_file = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.exists());
+
+            app.manage(AppState::new(pdfium, initial_file));
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::doc::take_launch_file,
+            commands::doc::open_document,
+            commands::doc::render_page,
+            commands::doc::get_page_sizes,
+            commands::pages::list_pages,
+            commands::pages::reorder_pages,
+            commands::pages::delete_pages,
+            commands::pages::rotate_page,
+            commands::pages::extract_pages,
+            commands::annots::add_text_annotation,
+            commands::annots::list_available_fonts,
+            commands::annots::list_text_annotations,
+            commands::annots::delete_text_annotation,
+            commands::signatures::import_signature,
+            commands::signatures::save_drawn_signature,
+            commands::signatures::list_signatures,
+            commands::signatures::delete_signature,
+            commands::signatures::get_signature_bytes,
+            commands::signatures::place_signature,
+            commands::save::save_document,
+            commands::save::save_document_as,
+            commands::recents::list_recent_documents,
+            commands::recents::list_recent_places,
+            commands::recents::set_recent_document_pinned,
+            commands::recents::set_recent_place_pinned,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

@@ -1,0 +1,15 @@
+# Forces `cargo test` to run tests sequentially within each test binary.
+#
+# Why: tests that touch PDFium share one process-wide Pdfium instance (see
+# tests/common/mod.rs) because PDFium's own library init isn't reentrant.
+# pdfium-render's `thread_safe` feature claims to serialize FFI calls
+# internally, but running these tests concurrently (cargo's default)
+# triggered a real "free(): invalid pointer" heap corruption crash -- so
+# thread_safe alone isn't a guarantee worth trusting here. The actual app
+# (src/state.rs) never hits this because AppState's own Mutex already
+# serializes every PDFium call end-to-end, holding the lock for the full
+# duration of each command; this setting makes the test suite honor that
+# same "only one thread touches PDFium at a time" invariant instead of
+# relying on thread_safe's internal locking alone.
+[env]
+RUST_TEST_THREADS = "1"
