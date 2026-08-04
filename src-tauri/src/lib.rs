@@ -44,7 +44,33 @@ pub fn run() {
             // access) can happen here directly -- it would delay the splash
             // window's very first paint. Do it on a background thread instead
             // and let setup() return immediately.
-            let splash = app.get_webview_window("splashscreen");
+            //
+            // The splash window is built here (rather than declared in
+            // tauri.conf.json) so on_page_load can be attached before the
+            // webview navigates -- that's only available on the builder, not
+            // on an already-created window. It starts hidden and is only
+            // shown once its content has actually finished loading, so the
+            // OS never displays an empty/white frame while the webview is
+            // still painting its first frame.
+            let splash = tauri::WebviewWindowBuilder::new(
+                app,
+                "splashscreen",
+                tauri::WebviewUrl::App("splashscreen.html".into()),
+            )
+            .inner_size(720.0, 720.0)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .center()
+            .skip_taskbar(true)
+            .visible(false)
+            .on_page_load(|window, payload| {
+                if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                    let _ = window.show();
+                }
+            })
+            .build()
+            .ok();
             let main = app.get_webview_window("main");
             let app_handle = app.handle().clone();
 
