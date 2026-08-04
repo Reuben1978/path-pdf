@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use pdfium_render::prelude::Pdfium;
 use tauri::Manager;
@@ -38,21 +39,53 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
-                &pdfium_library_dir(),
-            ))?;
-            // Leaked deliberately: PdfDocument borrows from the Pdfium instance
-            // that opened it, and this instance needs to outlive every document
-            // opened for the lifetime of the process. See state.rs.
-            let pdfium: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
+            // The event loop doesn't start pumping/painting windows until this
+            // closure returns, so nothing blocking (PDFium's dlopen, disk
+            // access) can happen here directly -- it would delay the splash
+            // window's very first paint. Do it on a background thread instead
+            // and let setup() return immediately.
+            let splash = app.get_webview_window("splashscreen");
+            let main = app.get_webview_window("main");
+            let app_handle = app.handle().clone();
 
-            // When launched via a file association (e.g. double-clicking a
-            // .pdf with this app set as the default handler), the OS passes
-            // the file path as the first CLI argument. `.exists()` guards
-            // against treating some unrelated flag as a path.
-            let initial_file = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.exists());
+            std::thread::spawn(move || {
+                let start = std::time::Instant::now();
 
-            app.manage(AppState::new(pdfium, initial_file));
+                let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+                    &pdfium_library_dir(),
+                ))
+                .expect("failed to load PDFium library");
+                // Leaked deliberately: PdfDocument borrows from the Pdfium
+                // instance that opened it, and this instance needs to outlive
+                // every document opened for the lifetime of the process. See
+                // state.rs.
+                let pdfium: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
+
+                // When launched via a file association (e.g. double-clicking a
+                // .pdf with this app set as the default handler), the OS
+                // passes the file path as the first CLI argument. `.exists()`
+                // guards against treating some unrelated flag as a path.
+                let initial_file = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.exists());
+
+                app_handle.manage(AppState::new(pdfium, initial_file));
+
+                // Splash stays up for a fixed minimum so the branding is
+                // visible even though setup above usually finishes well
+                // under that. WebviewWindow methods dispatch to the event
+                // loop internally, so it's safe to call show()/close() from
+                // this plain OS thread.
+                let min_splash = Duration::from_millis(1500);
+                if let Some(remaining) = min_splash.checked_sub(start.elapsed()) {
+                    std::thread::sleep(remaining);
+                }
+
+                if let Some(splash) = splash {
+                    let _ = splash.close();
+                }
+                if let Some(main) = main {
+                    let _ = main.show();
+                }
+            });
 
             Ok(())
         })
