@@ -2,6 +2,7 @@
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { renderPage, reorderPages, deletePages, rotatePage, extractPages } from "../ipc";
   import { docState } from "../doc-state.svelte";
+  import Button from "../components/Button.svelte";
 
   const PDF_FILTER = { name: "PDF", extensions: ["pdf"] };
 
@@ -145,20 +146,20 @@
 
 <div class="panel">
   <div class="actions">
-    <button onclick={() => rotateSelected(false)} disabled={busy || selected.size === 0} title="Rotate left">
+    <Button icon onclick={() => rotateSelected(false)} disabled={busy || selected.size === 0} title="Rotate left">
       ⟲
-    </button>
-    <button onclick={() => rotateSelected(true)} disabled={busy || selected.size === 0} title="Rotate right">
+    </Button>
+    <Button icon onclick={() => rotateSelected(true)} disabled={busy || selected.size === 0} title="Rotate right">
       ⟳
-    </button>
-    <button onclick={deleteSelected} disabled={busy || selected.size === 0} title="Delete selected">
+    </Button>
+    <Button onclick={deleteSelected} disabled={busy || selected.size === 0} title="Delete selected">
       Delete
-    </button>
+    </Button>
   </div>
   <div class="extract">
-    <button onclick={extractSelected} disabled={busy || selected.size === 0}>
+    <Button stretch onclick={extractSelected} disabled={busy || selected.size === 0}>
       Extract selected…
-    </button>
+    </Button>
   </div>
   {#if extractStatus}
     <p class="extract-status">{extractStatus}</p>
@@ -216,10 +217,6 @@
     border-bottom: 1px solid var(--color-border, #ccc);
   }
 
-  .extract button {
-    flex: 1;
-  }
-
   .extract-status {
     margin: 0;
     padding: 0 var(--space-sm, 0.5rem) var(--space-sm, 0.5rem);
@@ -231,6 +228,7 @@
   .pages-list {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: var(--space-sm, 0.5rem);
     display: flex;
     flex-direction: column;

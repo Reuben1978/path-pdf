@@ -9,6 +9,7 @@
     type RecentEntry,
   } from "../ipc";
   import { docState } from "../doc-state.svelte";
+  import Button from "../components/Button.svelte";
 
   const PDF_FILTER = { name: "PDF", extensions: ["pdf"] };
 
@@ -59,7 +60,7 @@
 <div class="start">
   <div class="hero">
     <h1>Path PDF</h1>
-    <button onclick={openFile}>Open a PDF…</button>
+    <Button onclick={openFile}>Open a PDF…</Button>
     {#if error}
       <p class="error">{error}</p>
     {/if}

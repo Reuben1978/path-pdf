@@ -10,6 +10,9 @@
   --color-thumb-bg: #f2f1f4;
   --color-error: #f87171;
   --color-accent: #3b82f6;
+  --color-accent-purple: rgb(75, 64, 135);
+  --color-accent-purple-bright: rgb(139, 118, 224);
+  --shadow-glow: 0 0 12px 2px rgba(84, 70, 165, 0.55);
 
   --space-sm: 0.5rem;
   --space-md: 1rem;
@@ -22,6 +25,8 @@ html,
 body {
   margin: 0;
   height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
   color: var(--color-text);
   background: var(--color-bg);
 }

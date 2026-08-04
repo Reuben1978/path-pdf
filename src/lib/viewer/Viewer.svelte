@@ -6,6 +6,9 @@
   import { viewerState } from "./viewer-state.svelte";
   import PageSlot from "./PageSlot.svelte";
   import StartScreen from "../start/StartScreen.svelte";
+  import PrintArea from "../print/PrintArea.svelte";
+  import { printDocument, printState } from "../print/print-state.svelte";
+  import Button from "../components/Button.svelte";
 
   const PDF_FILTER = { name: "PDF", extensions: ["pdf"] };
 
@@ -40,9 +43,16 @@
     refreshAnnotations();
   });
 
+  // Scrolls scrollContainer directly by the needed delta rather than calling
+  // el.scrollIntoView(), which walks every scrollable ancestor -- including
+  // the document itself -- and can leave the whole window nudged down with
+  // no code that ever resets it.
   function scrollToPage(index: number) {
-    const el = scrollContainer?.querySelector(`[data-page-index="${index}"]`);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!scrollContainer) return;
+    const el = scrollContainer.querySelector(`[data-page-index="${index}"]`);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+    scrollContainer.scrollBy({ top: delta, behavior: "smooth" });
   }
 
   // Explicit navigation (pages panel thumbnail click, Prev/Next) scrolls the
@@ -89,6 +99,15 @@
     }
   }
 
+  async function doPrint() {
+    if (docState.id === null) return;
+    try {
+      await printDocument(docState.id, docState.pageSizes);
+    } catch (e) {
+      docState.error = String(e);
+    }
+  }
+
   // Ctrl+scroll to zoom -- the standard cross-app convention (browsers, most
   // PDF viewers), which is also why plain scrolling is left untouched for
   // normal page navigation.
@@ -120,29 +139,29 @@
 
 <div class="viewer">
   <div class="toolbar">
-    <button onclick={openFile}>Open…</button>
+    <Button onclick={openFile}>Open…</Button>
     {#if docState.path}
       <span class="doc-path" title={docState.path}>{docState.path}</span>
     {/if}
     {#if docState.pageCount > 0}
-      <button
+      <Button
         onclick={() => docState.navigateToPage(Math.max(0, docState.currentPage - 1))}
         disabled={docState.currentPage === 0}
       >
         Prev
-      </button>
+      </Button>
       <span>{docState.currentPage + 1} / {docState.pageCount}</span>
-      <button
+      <Button
         onclick={() => docState.navigateToPage(Math.min(docState.pageCount - 1, docState.currentPage + 1))}
         disabled={docState.currentPage === docState.pageCount - 1}
       >
         Next
-      </button>
-      <button onclick={() => viewerState.zoomOut()} title="Zoom out (Ctrl+-)">−</button>
-      <button class="zoom-level" onclick={() => viewerState.reset()} title="Reset zoom (Ctrl+0)">
+      </Button>
+      <Button icon onclick={() => viewerState.zoomOut()} title="Zoom out (Ctrl+-)">−</Button>
+      <Button class="zoom-level" onclick={() => viewerState.reset()} title="Reset zoom (Ctrl+0)">
         {Math.round(viewerState.zoom * 100)}%
-      </button>
-      <button onclick={() => viewerState.zoomIn()} title="Zoom in (Ctrl++)">+</button>
+      </Button>
+      <Button icon onclick={() => viewerState.zoomIn()} title="Zoom in (Ctrl++)">+</Button>
     {/if}
   </div>
   {#if docState.pageCount > 0}
@@ -151,8 +170,11 @@
         <input type="checkbox" bind:checked={flattenOnSave} />
         Flatten annotations
       </label>
-      <button onclick={doSave}>Save</button>
-      <button onclick={doSaveAs}>Save As…</button>
+      <Button onclick={doSave}>Save</Button>
+      <Button onclick={doSaveAs}>Save As…</Button>
+      <Button onclick={doPrint} disabled={printState.preparing}>
+        {printState.preparing ? "Preparing…" : "Print"}
+      </Button>
       {#if saveStatus}
         <span class="save-status">{saveStatus}</span>
       {/if}
@@ -182,6 +204,7 @@
       </div>
     </div>
   {/if}
+  <PrintArea />
 </div>
 
 <style>
@@ -201,7 +224,7 @@
     border-bottom: 1px solid var(--color-border, #333);
   }
 
-  .zoom-level {
+  :global(.zoom-level) {
     min-width: 3.5em;
     font-size: 12px;
   }
@@ -276,6 +299,7 @@
   .canvas-scroll {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--color-canvas-bg, #0f0d13);
   }
 

@@ -5,6 +5,7 @@
   import { SIGNATURE_DRAG_MIME } from "./signature";
   import { toolState } from "./tool-state.svelte";
   import { typewriterSettings, FONT_LABELS, FONT_SIZES } from "./typewriter-settings.svelte";
+  import Button from "../components/Button.svelte";
 
   let collapsed = $state(false);
   let importPath = $state("");
@@ -173,7 +174,7 @@
 
     <div class="import">
       <input type="text" placeholder="/path/to/signature.png" bind:value={importPath} />
-      <button onclick={doImport}>Import</button>
+      <Button onclick={doImport}>Import</Button>
     </div>
 
     <div class="draw">
@@ -188,20 +189,19 @@
         onmouseleave={drawEnd}
       ></canvas>
       <div class="draw-actions">
-        <button onclick={clearDrawing} disabled={!hasDrawn}>Clear</button>
-        <button onclick={saveDrawing} disabled={!hasDrawn}>Save</button>
+        <Button onclick={clearDrawing} disabled={!hasDrawn}>Clear</Button>
+        <Button onclick={saveDrawing} disabled={!hasDrawn}>Save</Button>
       </div>
     </div>
 
     <div class="text-tool-row">
-      <button
-        class="text-tool-toggle"
-        class:active={toolState.textToolActive}
+      <Button
+        active={toolState.textToolActive}
         onclick={() => (toolState.textToolActive = !toolState.textToolActive)}
         title="Click a page to add text"
       >
         Text
-      </button>
+      </Button>
       <select bind:value={typewriterSettings.fontName} title="Font">
         {#each Object.entries(FONT_LABELS) as [value, label] (value)}
           <option {value}>{label}</option>
@@ -337,11 +337,6 @@
     gap: 4px;
     align-items: center;
     flex-wrap: wrap;
-  }
-
-  .text-tool-toggle.active {
-    background: #3b82f6;
-    color: white;
   }
 
   .text-tool-row select {
