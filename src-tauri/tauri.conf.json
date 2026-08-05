@@ -14,10 +14,12 @@
       {
         "label": "main",
         "title": "Path PDF",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 800,
         "resizable": true,
         "fullscreen": false,
+        "maximized": true,
+        "dragDropEnabled": false,
         "visible": false
       }
     ],
@@ -34,6 +36,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "PDF Document",
+        "description": "PDF Document",
+        "mimeType": "application/pdf",
+        "role": "Editor"
+      }
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
