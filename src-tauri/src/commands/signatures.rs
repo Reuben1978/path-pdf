@@ -22,9 +22,9 @@ fn signatures_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
 
 /// Timestamp-based filename, unique enough for this single-user, low-frequency
 /// use case without pulling in a UUID dependency just for this.
-fn unique_filename() -> String {
+fn unique_filename(extension: &str) -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("sig_{nanos}.png")
+    format!("sig_{nanos}.{extension}")
 }
 
 fn store_png(dir: &Path, bytes: &[u8]) -> Result<String, AppError> {
@@ -32,7 +32,15 @@ fn store_png(dir: &Path, bytes: &[u8]) -> Result<String, AppError> {
     // library -- every file on disk here is later fed straight into PDFium.
     annots::signature_dimensions(bytes)?;
 
-    let filename = unique_filename();
+    // Imported signatures may be PNG or JPEG (see Cargo.toml's image crate
+    // features) -- name the file to match what's actually in it, since the
+    // frontend picks a Blob MIME type off this extension when rendering
+    // thumbnails.
+    let extension = match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Jpeg) => "jpg",
+        _ => "png",
+    };
+    let filename = unique_filename(extension);
     fs::write(dir.join(&filename), bytes).map_err(|e| AppError::AnnotationFailed(e.to_string()))?;
     Ok(filename)
 }

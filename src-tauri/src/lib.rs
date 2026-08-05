@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use pdfium_render::prelude::Pdfium;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 mod commands;
 mod state;
@@ -54,9 +54,39 @@ fn pdfium_library_dir(app_handle: &tauri::AppHandle) -> PathBuf {
     dev_dir
 }
 
+/// Pulls the launched-with file path out of a process's argv (`argv[0]` is
+/// the exe itself). Shared by this process's own startup and by
+/// tauri-plugin-single-instance's callback, which relays a *second*
+/// process's argv here instead of it ever reaching `main`. `.exists()`
+/// guards against treating some unrelated flag as a path.
+fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
+    argv.get(1).map(PathBuf::from).filter(|p| p.exists())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Not available on mobile (see the target-specific dependency in
+    // Cargo.toml). Without this, double-clicking a second PDF while Path
+    // PDF is already running would launch a whole separate process/window
+    // instead of opening the file in the existing one -- this must be the
+    // first plugin registered, per tauri-plugin-single-instance's docs.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = file_arg_from(&argv) {
+                let _ = app.emit("open-file", path.to_string_lossy().into_owned());
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The event loop doesn't start pumping/painting windows until this
@@ -109,9 +139,9 @@ pub fn run() {
 
                 // When launched via a file association (e.g. double-clicking a
                 // .pdf with this app set as the default handler), the OS
-                // passes the file path as the first CLI argument. `.exists()`
-                // guards against treating some unrelated flag as a path.
-                let initial_file = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.exists());
+                // passes the file path as the first CLI argument.
+                let args: Vec<String> = std::env::args().collect();
+                let initial_file = file_arg_from(&args);
 
                 app_handle.manage(AppState::new(pdfium, initial_file));
 

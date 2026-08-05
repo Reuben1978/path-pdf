@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { importSignature, saveDrawnSignature, deleteSignature, getSignatureBytes } from "../ipc";
   import { signatureLibrary } from "./signature-state.svelte";
   import { SIGNATURE_DRAG_MIME } from "./signature";
@@ -7,8 +8,15 @@
   import { typewriterSettings, FONT_LABELS, FONT_SIZES } from "./typewriter-settings.svelte";
   import Button from "../components/Button.svelte";
 
+  const IMAGE_FILTER = { name: "Images", extensions: ["png", "jpg", "jpeg"] };
+
+  function mimeTypeFor(filename: string): string {
+    return filename.toLowerCase().endsWith(".jpg") || filename.toLowerCase().endsWith(".jpeg")
+      ? "image/jpeg"
+      : "image/png";
+  }
+
   let collapsed = $state(false);
-  let importPath = $state("");
   let thumbnails = $state<Record<string, string>>({});
   let error = $state<string | null>(null);
 
@@ -26,7 +34,7 @@
       for (const sig of signatureLibrary.signatures) {
         if (!thumbnails[sig.filename]) {
           const bytes = await getSignatureBytes(sig.filename);
-          const blob = new Blob([Uint8Array.from(bytes)], { type: "image/png" });
+          const blob = new Blob([Uint8Array.from(bytes)], { type: mimeTypeFor(sig.filename) });
           thumbnails = { ...thumbnails, [sig.filename]: URL.createObjectURL(blob) };
         }
       }
@@ -36,10 +44,12 @@
   }
 
   async function doImport() {
-    if (!importPath) return;
+    const paths = await openDialog({ multiple: true, filters: [IMAGE_FILTER] });
+    if (!paths) return;
     try {
-      await importSignature(importPath);
-      importPath = "";
+      for (const path of paths) {
+        await importSignature(path);
+      }
       await refresh();
     } catch (e) {
       error = String(e);
@@ -173,8 +183,7 @@
     </div>
 
     <div class="import">
-      <input type="text" placeholder="/path/to/signature.png" bind:value={importPath} />
-      <Button onclick={doImport}>Import</Button>
+      <Button onclick={doImport}>Browse…</Button>
     </div>
 
     <div class="draw">
@@ -313,11 +322,6 @@
   .draw-actions {
     display: flex;
     gap: 4px;
-  }
-
-  .import input {
-    flex: 1;
-    min-width: 0;
   }
 
   .hint {
