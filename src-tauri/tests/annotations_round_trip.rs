@@ -98,6 +98,53 @@ fn signature_annotation_round_trips_through_save_and_reload() {
 }
 
 #[test]
+fn signature_resize_round_trips_through_save_and_reload() {
+    let pdfium = common::load_pdfium();
+    let mut document = doc::open(pdfium, &common::fixture("plain-text.pdf")).unwrap();
+    let page_order: Vec<u16> = (0..document.pages().len()).collect();
+
+    let png_bytes = std::fs::read(common::fixture("test-signature.png")).unwrap();
+    let annotation_index =
+        annots::add_signature_annotation(&mut document, 0, 80.0, 60.0, 150.0, 50.0, &png_bytes).unwrap();
+
+    // Resize to a different, non-square, off-origin rect -- deliberately not
+    // just a uniform scale of the original placement, so a transposed or
+    // otherwise-wrong transform wouldn't accidentally still look plausible.
+    let new_x = 200.0;
+    let new_y = 300.0;
+    let new_width = 90.0;
+    let new_height = 220.0;
+    let new_annotation_index = annots::resize_signature_annotation(
+        &mut document,
+        0,
+        annotation_index,
+        new_x,
+        new_y,
+        new_width,
+        new_height,
+        &png_bytes,
+    )
+    .unwrap();
+
+    let dest = std::env::temp_dir().join("pdfapp_test_signature_resize_round_trip.pdf");
+    let rebuilt = save::apply_page_order_and_flatten(pdfium, &document, &page_order, false).unwrap();
+    save::save_atomic(&rebuilt, &dest).unwrap();
+
+    let reloaded = pdfium.load_pdf_from_file(&dest, None).unwrap();
+    let page = reloaded.pages().get(0).unwrap();
+    let stamp = page.annotations().get(new_annotation_index as usize).unwrap();
+    let object = stamp.objects().get(0).unwrap();
+    let bounds = object.bounds().unwrap();
+
+    assert!((bounds.left().value - new_x).abs() < 1.0);
+    assert!((bounds.bottom().value - new_y).abs() < 1.0);
+    assert!((bounds.right().value - (new_x + new_width)).abs() < 1.0);
+    assert!((bounds.top().value - (new_y + new_height)).abs() < 1.0);
+
+    let _ = std::fs::remove_file(&dest);
+}
+
+#[test]
 fn flattening_removes_annotation_as_a_discrete_object_but_keeps_it_visible() {
     let pdfium = common::load_pdfium();
     let mut document = doc::open(pdfium, &common::fixture("plain-text.pdf")).unwrap();

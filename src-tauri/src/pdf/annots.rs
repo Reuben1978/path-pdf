@@ -46,7 +46,7 @@ pub fn add_signature_annotation(
     width: f32,
     height: f32,
     png_bytes: &[u8],
-) -> Result<(), AppError> {
+) -> Result<u32, AppError> {
     let image = image::load_from_memory(png_bytes)
         .map_err(|e| AppError::AnnotationFailed(format!("invalid signature image: {e}")))?;
 
@@ -54,6 +54,10 @@ pub fn add_signature_annotation(
         .pages()
         .get(physical_page_index)
         .map_err(|e| AppError::AnnotationFailed(e.to_string()))?;
+
+    // Annotations are append-ordered (list_text_annotations' enumerate()
+    // relies on the same assumption), so this is the new annotation's index.
+    let annotation_index = page.annotations().len() as u32;
 
     let mut stamp = page
         .annotations_mut()
@@ -84,7 +88,44 @@ pub fn add_signature_annotation(
         .set_contents("Signature")
         .map_err(|e| AppError::AnnotationFailed(e.to_string()))?;
 
-    Ok(())
+    Ok(annotation_index)
+}
+
+/// Resizes/repositions an already-placed signature by deleting the existing
+/// annotation and recreating it at the new bounds from the same image bytes.
+///
+/// This isn't the first thing tried -- mutating the existing annotation's
+/// child image object in place via `reset_matrix_to_identity`/`scale`/
+/// `translate` (mirroring exactly what `create_image_object` itself does at
+/// creation time) works perfectly on the `PdfPageObject` handle returned by
+/// `stamp.objects_mut().get(0)`: its own `.bounds()` reflects the new
+/// position and size immediately afterward. But re-fetching the same
+/// annotation's object fresh (a new `.get(0)` call, or after a save/reload)
+/// shows the *original* unchanged bounds -- the mutated handle doesn't
+/// appear to be the live object PDFium actually persists as part of the
+/// stamp. Delete-and-recreate sidesteps that entirely by reusing two
+/// primitives already proven correct elsewhere in this file (this exact
+/// deletion path backs `delete_text_annotation`; this exact creation path
+/// backs `add_signature_annotation`), rather than relying on in-place
+/// mutation whose actual persistence behavior isn't fully understood.
+///
+/// Note `stamp.set_bounds()` alone (used elsewhere in this file) only
+/// updates the annotation's `/Rect` metadata -- it does not rescale
+/// whatever's actually drawn inside it, which is why a plain bounds update
+/// was never going to be enough on its own either way.
+#[allow(clippy::too_many_arguments)]
+pub fn resize_signature_annotation(
+    document: &mut PdfDocument,
+    physical_page_index: PdfPageIndex,
+    annotation_index: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    png_bytes: &[u8],
+) -> Result<u32, AppError> {
+    delete_text_annotation(document, physical_page_index, annotation_index)?;
+    add_signature_annotation(document, physical_page_index, x, y, width, height, png_bytes)
 }
 
 pub struct TextAnnotationSummary {

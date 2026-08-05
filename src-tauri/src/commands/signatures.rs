@@ -109,7 +109,7 @@ pub fn place_signature(
     height: f32,
     app: AppHandle,
     state: State<AppState>,
-) -> Result<(), AppError> {
+) -> Result<u32, AppError> {
     let path = signatures_dir(&app)?.join(&filename);
     let bytes = fs::read(path).map_err(|e| AppError::AnnotationFailed(e.to_string()))?;
 
@@ -119,5 +119,31 @@ pub fn place_signature(
             .get(page_index as usize)
             .ok_or(AppError::PageOutOfRange { index: page_index, page_count })?;
         annots::add_signature_annotation(document, physical, x, y, width, height, &bytes)
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn resize_signature_annotation(
+    id: u32,
+    page_index: u32,
+    annotation_index: u32,
+    filename: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<u32, AppError> {
+    let path = signatures_dir(&app)?.join(&filename);
+    let bytes = fs::read(path).map_err(|e| AppError::AnnotationFailed(e.to_string()))?;
+
+    state.with_document(id, |document, page_order, _path| {
+        let page_count = page_order.len() as u32;
+        let physical = *page_order
+            .get(page_index as usize)
+            .ok_or(AppError::PageOutOfRange { index: page_index, page_count })?;
+        annots::resize_signature_annotation(document, physical, annotation_index, x, y, width, height, &bytes)
     })
 }

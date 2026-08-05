@@ -150,6 +150,8 @@ export async function getSignatureBytes(filename: string): Promise<Uint8Array> {
 /**
  * `x`/`y`/`width`/`height` must already be in PDF page space -- see
  * lib/tools/signature.ts for the drag-rectangle-to-PDF-points conversion.
+ * Returns the placed annotation's index, e.g. for a follow-up
+ * `resizeSignatureAnnotation` call.
  */
 export async function placeSignature(
   id: number,
@@ -159,8 +161,37 @@ export async function placeSignature(
   y: number,
   width: number,
   height: number,
-): Promise<void> {
+): Promise<number> {
   return invoke("place_signature", { id, pageIndex, filename, x, y, width, height });
+}
+
+/**
+ * Resizes/repositions an already-placed signature. Internally this deletes
+ * and recreates the annotation (see the Rust-side doc comment on
+ * `resize_signature_annotation` for why), so the annotation's index can
+ * change -- always use the returned index for any further resize of the
+ * same signature.
+ */
+export async function resizeSignatureAnnotation(
+  id: number,
+  pageIndex: number,
+  annotationIndex: number,
+  filename: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<number> {
+  return invoke("resize_signature_annotation", {
+    id,
+    pageIndex,
+    annotationIndex,
+    filename,
+    x,
+    y,
+    width,
+    height,
+  });
 }
 
 export async function saveDocument(id: number, flatten: boolean): Promise<void> {

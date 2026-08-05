@@ -185,6 +185,7 @@ pub fn run() {
             commands::signatures::delete_signature,
             commands::signatures::get_signature_bytes,
             commands::signatures::place_signature,
+            commands::signatures::resize_signature_annotation,
             commands::save::save_document,
             commands::save::save_document_as,
             commands::recents::list_recent_documents,

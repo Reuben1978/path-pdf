@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { renderPage, placeSignature } from "../ipc";
+  import { renderPage, placeSignature, resizeSignatureAnnotation } from "../ipc";
   import { docState } from "../doc-state.svelte";
   import { placeText } from "../tools/typewriter";
   import { pixelToPdfPoint, SIGNATURE_DRAG_MIME } from "../tools/signature";
@@ -14,6 +14,19 @@
   } = $props();
 
   const DEFAULT_SIGNATURE_WIDTH_POINTS = 150;
+  const MIN_SIGNATURE_WIDTH_PX = 20;
+
+  type Corner = "tl" | "tr" | "bl" | "br";
+
+  type PlacedSignature = {
+    filename: string;
+    annotationIndex: number;
+    aspect: number; // height / width, fixed at drop time
+    xPx: number;
+    yPx: number;
+    widthPx: number;
+    heightPx: number;
+  };
 
   let wrapper: HTMLDivElement;
   let canvas: HTMLCanvasElement;
@@ -34,6 +47,12 @@
   let pendingClick = $state<{ x: number; y: number } | null>(null);
   let pendingText = $state("");
   let dragOverSignature = $state<{ x: number; y: number; width: number; height: number } | null>(null);
+
+  // The signature just dropped, if any -- immediately selected with resize
+  // handles, no extra click needed. Only ever tracks the most recent drop
+  // (this page's own, since a drop elsewhere sets state in that PageSlot
+  // instance instead); re-selecting an older placement isn't in scope.
+  let placedSignature = $state<PlacedSignature | null>(null);
 
   async function doRender() {
     if (docState.id === null || !canvas || !wrapper) return;
@@ -107,6 +126,7 @@
   }
 
   function onCanvasClick(event: MouseEvent) {
+    if (placedSignature) placedSignature = null;
     if (!toolState.textToolActive || docState.id === null) return;
     pendingClick = { x: event.offsetX, y: event.offsetY };
     pendingText = "";
@@ -175,6 +195,7 @@
     event.preventDefault();
     const filename = event.dataTransfer?.getData(SIGNATURE_DRAG_MIME);
     dragOverSignature = null;
+    placedSignature = null;
     if (!filename || docState.id === null) return;
 
     const sig = signatureLibrary.signatures.find((s) => s.filename === filename);
@@ -185,10 +206,12 @@
     const heightPoints = widthPoints * aspect;
     const widthPx = (widthPoints / renderedWidthPoints) * canvas.width;
     const heightPx = (heightPoints / renderedHeightPoints) * canvas.height;
+    const xPx = event.offsetX - widthPx / 2;
+    const yPx = event.offsetY - heightPx / 2;
 
     const { x, y } = pixelToPdfPoint(
-      event.offsetX - widthPx / 2,
-      event.offsetY + heightPx / 2,
+      xPx,
+      yPx + heightPx,
       canvas.width,
       canvas.height,
       renderedWidthPoints,
@@ -196,13 +219,91 @@
     );
 
     try {
-      await placeSignature(docState.id, pageIndex, filename, x, y, widthPoints, heightPoints);
+      const annotationIndex = await placeSignature(docState.id, pageIndex, filename, x, y, widthPoints, heightPoints);
+      docState.touchPage(pageIndex);
+      placedSignature = { filename, annotationIndex, aspect, xPx, yPx, widthPx, heightPx };
+    } catch (e) {
+      docState.error = String(e);
+    }
+  }
+
+  // Corner-drag resize of the just-placed signature. Only the CSS overlay
+  // box updates live on pointermove -- calling the backend (and therefore
+  // re-rasterizing the whole page) on every move would blow the 60fps
+  // rendering budget. The real resize commits once, on pointerup.
+  function onHandlePointerDown(event: PointerEvent, corner: Corner) {
+    if (!placedSignature) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const aspect = placedSignature.aspect;
+    const anchorX = corner.includes("l") ? placedSignature.xPx + placedSignature.widthPx : placedSignature.xPx;
+    const anchorY = corner.includes("t") ? placedSignature.yPx + placedSignature.heightPx : placedSignature.yPx;
+
+    function onMove(moveEvent: PointerEvent) {
+      if (!placedSignature) return;
+      const rect = canvas.getBoundingClientRect();
+      const pointerX = moveEvent.clientX - rect.left;
+
+      const widthPx = Math.max(MIN_SIGNATURE_WIDTH_PX, Math.abs(pointerX - anchorX));
+      const heightPx = widthPx * aspect;
+      const xPx = corner.includes("l") ? anchorX - widthPx : anchorX;
+      const yPx = corner.includes("t") ? anchorY - heightPx : anchorY;
+
+      placedSignature = { ...placedSignature, xPx, yPx, widthPx, heightPx };
+    }
+
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      commitResize();
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  async function commitResize() {
+    if (!placedSignature || docState.id === null) return;
+    const sig = placedSignature;
+
+    const { x, y } = pixelToPdfPoint(
+      sig.xPx,
+      sig.yPx + sig.heightPx,
+      canvas.width,
+      canvas.height,
+      renderedWidthPoints,
+      renderedHeightPoints,
+    );
+    const widthPoints = (sig.widthPx / canvas.width) * renderedWidthPoints;
+    const heightPoints = (sig.heightPx / canvas.height) * renderedHeightPoints;
+
+    try {
+      const annotationIndex = await resizeSignatureAnnotation(
+        docState.id,
+        pageIndex,
+        sig.annotationIndex,
+        sig.filename,
+        x,
+        y,
+        widthPoints,
+        heightPoints,
+      );
+      placedSignature = { ...sig, annotationIndex };
       docState.touchPage(pageIndex);
     } catch (e) {
       docState.error = String(e);
     }
   }
+
+  function onWindowKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && placedSignature) {
+      placedSignature = null;
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div
   class="page-slot"
@@ -227,6 +328,25 @@
       style:width="{dragOverSignature.width}px"
       style:height="{dragOverSignature.height}px"
     ></div>
+  {/if}
+  {#if placedSignature}
+    <div
+      class="signature-selection"
+      style:left="{placedSignature.xPx}px"
+      style:top="{placedSignature.yPx}px"
+      style:width="{placedSignature.widthPx}px"
+      style:height="{placedSignature.heightPx}px"
+    >
+      {#each ["tl", "tr", "bl", "br"] as const as corner (corner)}
+        <div
+          class="resize-handle handle-{corner}"
+          role="button"
+          tabindex="-1"
+          aria-label="Resize signature"
+          onpointerdown={(e) => onHandlePointerDown(e, corner)}
+        ></div>
+      {/each}
+    </div>
   {/if}
   {#if pendingClick}
     <textarea
@@ -271,6 +391,45 @@
     border: 2px dashed #3b82f6;
     background: rgba(59, 130, 246, 0.15);
     pointer-events: none;
+  }
+
+  .signature-selection {
+    position: absolute;
+    border: 2px solid #3b82f6;
+  }
+
+  .resize-handle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #3b82f6;
+    border-radius: 50%;
+    background: white;
+    touch-action: none;
+  }
+
+  .handle-tl {
+    top: -7px;
+    left: -7px;
+    cursor: nwse-resize;
+  }
+
+  .handle-tr {
+    top: -7px;
+    right: -7px;
+    cursor: nesw-resize;
+  }
+
+  .handle-bl {
+    bottom: -7px;
+    left: -7px;
+    cursor: nesw-resize;
+  }
+
+  .handle-br {
+    bottom: -7px;
+    right: -7px;
+    cursor: nwse-resize;
   }
 
   .text-input {

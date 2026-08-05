@@ -15,7 +15,7 @@
   let scrollContainer: HTMLDivElement = $state()!;
   let annotations = $state<{ annotationIndex: number; contents: string }[]>([]);
 
-  let flattenOnSave = $state(false);
+  let saveLayers = $state(true);
   let saveStatus = $state<string | null>(null);
 
   async function openFile() {
@@ -80,7 +80,7 @@
   async function doSave() {
     if (docState.id === null) return;
     try {
-      await saveDocument(docState.id, flattenOnSave);
+      await saveDocument(docState.id, !saveLayers);
       saveStatus = `Saved to ${docState.path}`;
     } catch (e) {
       docState.error = String(e);
@@ -92,7 +92,7 @@
     const path = await saveDialog({ filters: [PDF_FILTER], defaultPath: "untitled.pdf" });
     if (!path) return;
     try {
-      await saveDocumentAs(docState.id, path, flattenOnSave);
+      await saveDocumentAs(docState.id, path, !saveLayers);
       saveStatus = `Saved to ${path}`;
     } catch (e) {
       docState.error = String(e);
@@ -166,9 +166,9 @@
   </div>
   {#if docState.pageCount > 0}
     <div class="save-bar">
-      <label class="flatten-toggle">
-        <input type="checkbox" bind:checked={flattenOnSave} />
-        Flatten annotations
+      <label class="save-layers-toggle">
+        <input type="checkbox" bind:checked={saveLayers} />
+        Save layers
       </label>
       <Button onclick={doSave}>Save</Button>
       <Button onclick={doSaveAs}>Save As…</Button>
@@ -248,7 +248,7 @@
     font-size: 13px;
   }
 
-  .flatten-toggle {
+  .save-layers-toggle {
     display: flex;
     align-items: center;
     gap: 4px;
