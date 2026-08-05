@@ -28,8 +28,9 @@ for now — don't add Mac-specific code paths, but don't deliberately break port
 either.
 
 - Development happens on Linux Mint (Ubuntu/Debian base, apt).
-- Windows builds are tested in a VM. Assume the developer cannot debug Windows
-  interactively without friction, so be conservative with platform-specific code.
+- Windows builds come from `.github/workflows/build.yml` (GitHub Actions), tested on a
+  separate physical/VM Windows machine, not the dev box. Assume the developer cannot debug
+  Windows interactively without friction, so be conservative with platform-specific code.
 - Anything touching file paths, line endings, or the filesystem needs to work on both.
   Never hardcode `/` separators; use `std::path::PathBuf`.
 
@@ -43,8 +44,13 @@ either.
 | UI | TypeScript + Svelte 5 + Vite |
 | Styling | Plain CSS with custom properties. No Tailwind, no component library. |
 
-PDFium binaries come from `bblanchon/pdfium-binaries`. They are downloaded by a setup
-script into `vendor/pdfium/<target>/` and are **not** committed to the repo.
+PDFium binaries come from `bblanchon/pdfium-binaries`, fetched by `scripts/fetch-pdfium.sh`
+into `vendor/pdfium/<target>/` (gitignored, not committed). Release builds bundle the
+platform's PDFium library as a Tauri resource (`tauri.linux.conf.json` /
+`tauri.windows.conf.json`) and resolve it at runtime via `resource_dir()`, falling back to
+the `vendor/` dev path if the bundled resource isn't found — see the doc comment on
+`pdfium_library_dir()` in `src-tauri/src/lib.rs`. CI must run `fetch-pdfium.sh` before
+`tauri build`, since `vendor/` isn't in git.
 
 Do not add a dependency without asking. Every crate and npm package is a size and
 maintenance cost, and "lightweight" is a product requirement, not a preference.

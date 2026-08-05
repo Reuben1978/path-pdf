@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../vendor/pdfium/x86_64-pc-windows-msvc/bin/pdfium.dll": "pdfium/pdfium.dll",
+      "../vendor/pdfium/x86_64-pc-windows-msvc/LICENSE": "pdfium/LICENSE"
+    }
+  }
+}

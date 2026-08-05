@@ -48,6 +48,14 @@ cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 npm run check
 ```
 
+## CI / releases
+
+`.github/workflows/build.yml` builds both platforms on every push to `master` and on `v*`
+tags, and uploads the installers as downloadable workflow artifacts. Windows builds are
+signed via [SignPath Foundation](https://signpath.org/) once `SIGNPATH_API_TOKEN` (secret)
+and `SIGNPATH_ORGANIZATION_ID` / `SIGNPATH_PROJECT_SLUG` (repo variables) are configured —
+until then the signing step is skipped and the plain unsigned installer is what you download.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

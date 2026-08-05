@@ -21,17 +21,37 @@ const PDFIUM_TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
 #[cfg(not(target_os = "windows"))]
 const PDFIUM_TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
-/// Locates the PDFium dynamic library fetched by `scripts/fetch-pdfium.sh`.
-/// Only the dev layout (`vendor/pdfium/<triple>/`) is handled today; bundling
-/// PDFium into release builds via Tauri resources is a deliberate follow-up,
-/// once dev rendering is verified working end to end.
-fn pdfium_library_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+/// Locates the PDFium dynamic library, preferring Tauri's bundled-resource
+/// directory (see `tauri.linux.conf.json` / `tauri.windows.conf.json`,
+/// which bundle PDFium under a `pdfium/` resource) and falling back to the
+/// `vendor/pdfium/<triple>/` layout fetched by `scripts/fetch-pdfium.sh`,
+/// resolved relative to the source tree at compile time.
+///
+/// The fallback matters even in release builds: `tauri build` only copies
+/// `resources` into the packaged installers (.deb/.AppImage/.msi), not
+/// loosely next to the raw binary in `target/release/`. Tauri's
+/// `resource_dir()` still resolves to `target/release/` itself when run
+/// from there (it detects the Cargo output directory), so a release binary
+/// run directly out of a dev checkout -- as opposed to a real install --
+/// would otherwise find no `pdfium/` resource at all. Probing for the
+/// bundled file's actual existence, rather than trusting whichever path
+/// resolved, covers both cases without needing a debug/release split.
+fn pdfium_library_dir(app_handle: &tauri::AppHandle) -> PathBuf {
+    let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("vendor")
         .join("pdfium")
         .join(PDFIUM_TARGET_TRIPLE)
-        .join(if cfg!(target_os = "windows") { "bin" } else { "lib" })
+        .join(if cfg!(target_os = "windows") { "bin" } else { "lib" });
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        let bundled_dir = resource_dir.join("pdfium");
+        if Pdfium::pdfium_platform_library_name_at_path(&bundled_dir).exists() {
+            return bundled_dir;
+        }
+    }
+
+    dev_dir
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,7 +98,7 @@ pub fn run() {
                 let start = std::time::Instant::now();
 
                 let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
-                    &pdfium_library_dir(),
+                    &pdfium_library_dir(&app_handle),
                 ))
                 .expect("failed to load PDFium library");
                 // Leaked deliberately: PdfDocument borrows from the Pdfium
