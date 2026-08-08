@@ -1,46 +1,29 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { emit, listen } from "@tauri-apps/api/event";
+  import { listen } from "@tauri-apps/api/event";
   import Viewer from "./lib/viewer/Viewer.svelte";
   import PagesPanel from "./lib/panel/PagesPanel.svelte";
   import SignatureLibrary from "./lib/tools/SignatureLibrary.svelte";
   import { docState } from "./lib/doc-state.svelte";
   import { takeLaunchFile } from "./lib/ipc";
 
-  // Resolves once the browser has actually committed a paint. A single
-  // requestAnimationFrame only promises "before the next paint", so it can
-  // still run ahead of the paint that makes this frame's DOM visible; two
-  // nested calls land after it.
-  //
-  // The timeout is not decoration. rAF does not fire while a window is
-  // hidden, and an earlier version of this waited on rAF before the window
-  // was ever shown -- which deadlocked startup permanently, since the app
-  // then never signalled that it was safe to reveal it. This window *is*
-  // shown before this runs now (Rust shows it behind the splash, see
-  // lib.rs), so rAF should fire promptly -- but startup must never again
-  // be able to hang on a frame that doesn't arrive.
-  function waitForPaint(timeoutMs = 2000): Promise<void> {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-      requestAnimationFrame(() => requestAnimationFrame(finish));
-      setTimeout(finish, timeoutMs);
-    });
+  // How long the branded splash overlay stays up. It's baked into
+  // index.html so it paints with the window's first frame; this just takes
+  // it away again once the app underneath is worth looking at.
+  const SPLASH_MS = 1500;
+  const SPLASH_FADE_MS = 250; // keep in sync with #splash's transition
+
+  function dismissSplashOverlay() {
+    const splash = document.getElementById("splash");
+    if (!splash) return;
+    setTimeout(() => {
+      splash.classList.add("hide");
+      setTimeout(() => splash.remove(), SPLASH_FADE_MS);
+    }, SPLASH_MS);
   }
 
   onMount(async () => {
-    // Tells the Rust side the window has real content on it, so the splash
-    // covering it can be dismissed -- see the "frontend-painted" listener
-    // in lib.rs. Deliberately not Tauri's on_page_load(Finished), which
-    // fires once the webview has loaded HTML/JS/CSS and can precede Svelte
-    // mounting anything; and deliberately after a confirmed paint rather
-    // than merely at mount, because mount only means the DOM exists, not
-    // that pixels have been drawn.
-    waitForPaint().then(() => emit("frontend-painted"));
+    dismissSplashOverlay();
 
     // Register this before the launch-file work below, and unconditionally.
     // Tauri's emit() doesn't buffer events for listeners that don't exist

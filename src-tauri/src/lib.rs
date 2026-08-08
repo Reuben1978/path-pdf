@@ -1,10 +1,7 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 
 use pdfium_render::prelude::Pdfium;
-use tauri::{Emitter, Listener, Manager};
+use tauri::{Emitter, Manager};
 
 mod commands;
 mod state;
@@ -65,33 +62,6 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
     argv.get(1).map(PathBuf::from).filter(|p| p.exists())
 }
 
-/// Dismisses the splash screen, once *both* the minimum splash duration has
-/// elapsed (background thread, for branding) and the frontend has reported
-/// that it has actually painted pixels ("frontend-painted", see
-/// src/app.svelte). Whichever finishes second performs the dismissal;
-/// `dismissed` guards against both doing it.
-///
-/// Note this only *closes the splash* -- it does not show main. Main is
-/// already on screen by this point, deliberately: see the comment on the
-/// splash's on_page_load in `run()` for why that ordering is what actually
-/// fixes the startup flash.
-fn try_dismiss_splash(
-    splash: &Option<tauri::WebviewWindow>,
-    min_duration_elapsed: &AtomicBool,
-    frontend_painted: &AtomicBool,
-    dismissed: &AtomicBool,
-) {
-    if !min_duration_elapsed.load(Ordering::SeqCst) || !frontend_painted.load(Ordering::SeqCst) {
-        return;
-    }
-    if dismissed.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    if let Some(splash) = splash {
-        let _ = splash.close();
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -118,19 +88,25 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // The event loop doesn't start pumping/painting windows until this
-            // closure returns, so nothing blocking (PDFium's dlopen, disk
-            // access) can happen here directly -- it would delay the splash
-            // window's very first paint. Do it on a background thread instead
-            // and let setup() return immediately.
+            // The event loop doesn't start pumping/painting windows until
+            // this closure returns, so nothing blocking (PDFium's dlopen,
+            // disk access) can happen here directly -- it would delay the
+            // window's very first paint. Do it on a background thread
+            // instead and let setup() return immediately.
             //
-            let min_duration_elapsed = Arc::new(AtomicBool::new(false));
-            let frontend_painted = Arc::new(AtomicBool::new(false));
-            let dismissed = Arc::new(AtomicBool::new(false));
-
-            // Main is built first (so the splash, created after, stacks above
-            // it) and starts hidden. It's shown a moment later, underneath
-            // the splash -- see the splash's on_page_load below.
+            // There is deliberately only one window. The splash used to be
+            // a separate always-on-top window, which is what caused the
+            // startup flashing: with two windows there is always some
+            // instant where neither fully covers the screen (the desktop
+            // shows through), or where the main window is up but hasn't
+            // painted its content yet (it visibly pops in). A webview does
+            // not paint at all while its window is hidden, so no ordering
+            // of show/close calls could avoid both. Now index.html carries
+            // the splash as static markup, so this window's *first* painted
+            // frame is already the branded splash, and the frontend removes
+            // that overlay once the app underneath is ready (app.svelte).
+            // The window is visible from the start; there is no hidden
+            // phase and nothing to swap.
             let main_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                     .title("Path PDF")
@@ -138,13 +114,15 @@ pub fn run() {
                     .resizable(true)
                     .fullscreen(false)
                     .maximized(true)
-                    // --color-bg from src/app.css. Without this both the
-                    // window and webview default to white, so any frame
-                    // rendered before the webview composites its content
-                    // flashes white against this app's dark UI. Keep in
-                    // sync with app.css.
-                    .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff))
-                    .visible(false);
+                    // --color-bg from app.css, matching both the splash
+                    // overlay in index.html and the app UI underneath it.
+                    // Without this the window and webview default to white
+                    // and flash before the webview composites. It also
+                    // covers a quirk seen on this machine: the webview lays
+                    // out narrower than the window (~1440px in a 1920px
+                    // window), leaving a strip the webview never paints --
+                    // matching this colour keeps that strip invisible.
+                    .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff));
             // Windows-only builder method (WebView2-specific) -- disabling
             // Tauri's native drag-drop handling is required for the app's
             // own HTML5 drag-and-drop (signature placement) to work on
@@ -152,81 +130,11 @@ pub fn run() {
             #[cfg(windows)]
             let main_builder = main_builder.drag_and_drop(false);
 
-            let main = main_builder.build().ok();
-
-            // The splash is built here (rather than declared in
-            // tauri.conf.json) so on_page_load can be attached before the
-            // webview navigates -- only available on the builder, not on an
-            // already-created window.
-            //
-            // When the splash has painted, it shows itself AND shows main
-            // underneath it. That ordering is the fix for the startup flash,
-            // and it took three wrong attempts to get right, so: a webview
-            // does not render while its window is hidden. So "wait until
-            // main has painted, then show main" is circular -- it can never
-            // paint, and every variation of that produced either a blank
-            // window flash or (when gated on requestAnimationFrame) a
-            // permanent deadlock. Main must be on screen to paint at all.
-            // Putting it on screen *behind* the always-on-top splash lets it
-            // paint during the splash's minimum display time, so by the time
-            // the splash closes there is a fully-drawn window underneath and
-            // nothing to flash. It also means the swap involves no show()
-            // at all -- only the splash closing -- so there is no instant
-            // where neither window covers the screen.
-            let splash = {
-                let main_for_splash_cb = main.clone();
-                tauri::WebviewWindowBuilder::new(
-                    app,
-                    "splashscreen",
-                    tauri::WebviewUrl::App("splashscreen.html".into()),
-                )
-                .inner_size(720.0, 720.0)
-                .resizable(false)
-                .decorations(false)
-                .always_on_top(true)
-                .center()
-                .skip_taskbar(true)
-                // Matches splashscreen.html's own black background, same
-                // reason as main above: the default is white.
-                .background_color(tauri::window::Color(0x00, 0x00, 0x00, 0xff))
-                .visible(false)
-                .on_page_load(move |window, payload| {
-                    if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                        let _ = window.show();
-                        if let Some(main) = &main_for_splash_cb {
-                            let _ = main.show();
-                            // Keep the splash above main -- main was just
-                            // mapped, which can raise it above the splash
-                            // depending on the window manager.
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
-                .build()
-                .ok()
-            };
-
-            if let Some(main) = &main {
-                let splash_for_cb = splash.clone();
-                let min_duration_elapsed_for_cb = min_duration_elapsed.clone();
-                let frontend_painted_for_cb = frontend_painted.clone();
-                let dismissed_for_cb = dismissed.clone();
-                main.once("frontend-painted", move |_event| {
-                    frontend_painted_for_cb.store(true, Ordering::SeqCst);
-                    try_dismiss_splash(
-                        &splash_for_cb,
-                        &min_duration_elapsed_for_cb,
-                        &frontend_painted_for_cb,
-                        &dismissed_for_cb,
-                    );
-                });
-            }
+            let _main = main_builder.build().ok();
 
             let app_handle = app.handle().clone();
-            let splash_for_thread = splash.clone();
 
             std::thread::spawn(move || {
-                let start = std::time::Instant::now();
 
                 let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
                     &pdfium_library_dir(&app_handle),
@@ -244,25 +152,10 @@ pub fn run() {
                 let args: Vec<String> = std::env::args().collect();
                 let initial_file = file_arg_from(&args);
 
+                // The splash overlay's minimum display time is handled in
+                // the frontend now (see SPLASH_MS in app.svelte), so this
+                // thread's only job is getting PDFium and AppState ready.
                 app_handle.manage(AppState::new(pdfium, initial_file));
-
-                // Splash stays up for a fixed minimum so the branding is
-                // visible even though setup above usually finishes well
-                // under that. WebviewWindow methods dispatch to the event
-                // loop internally, so it's safe to call show()/close() from
-                // this plain OS thread.
-                let min_splash = Duration::from_millis(1500);
-                if let Some(remaining) = min_splash.checked_sub(start.elapsed()) {
-                    std::thread::sleep(remaining);
-                }
-
-                min_duration_elapsed.store(true, Ordering::SeqCst);
-                try_dismiss_splash(
-                    &splash_for_thread,
-                    &min_duration_elapsed,
-                    &frontend_painted,
-                    &dismissed,
-                );
             });
 
             Ok(())
