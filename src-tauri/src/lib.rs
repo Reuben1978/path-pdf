@@ -161,7 +161,59 @@ pub fn run() {
             #[cfg(windows)]
             let main_builder = main_builder.drag_and_drop(false);
 
-            let _main = main_builder.build().ok();
+            let main_window = main_builder.build().ok();
+
+            // Belt-and-suspenders on top of `.theme(Some(Dark))` above: that
+            // fixed the persistent light-titlebar-the-whole-time version of
+            // the startup flash, but Reuben kept seeing a *fast* black bar
+            // at the top of the screen for a moment even after that fix --
+            // a genuine race rather than the fix failing (see CLAUDE.md in
+            // the VM Share folder for the video analysis that narrowed this
+            // down). Two candidate causes, both addressed here directly on
+            // the raw HWND instead of trusting Tauri's own timing, and both
+            // done now -- while the window is still `.visible(false)` above,
+            // strictly before `.show()` is ever called from `on_page_load`
+            // below -- so neither attribute can apply too late to matter:
+            //   1. `.theme()`'s effect on the actual DWM caption color might
+            //      itself apply a moment after window creation rather than
+            //      atomically with it; DWMWA_USE_IMMERSIVE_DARK_MODE set
+            //      directly removes any dependency on that timing.
+            //   2. This window is shown already-maximized via `.show()`
+            //      well after creation; if DWM's own open/maximize
+            //      transition animates the frame becoming visible before
+            //      the webview's first composited frame catches up, the
+            //      title-bar-height area could paint an instant before the
+            //      rest of the (correctly dark) content fills in -- exactly
+            //      "a black bar at the top for a moment". Disabling the
+            //      transition removes that window entirely.
+            #[cfg(windows)]
+            if let Some(hwnd) = main_window.as_ref().and_then(|w| w.hwnd().ok()) {
+                use windows::core::BOOL;
+                use windows::Win32::Graphics::Dwm::{
+                    DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                };
+
+                let enabled = BOOL::from(true);
+                let size = std::mem::size_of::<BOOL>() as u32;
+                // SAFETY: `hwnd` is a live window handle just returned by
+                // `build()` above; `enabled` outlives both calls and its
+                // size matches `size` exactly.
+                unsafe {
+                    let _ = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        &enabled as *const BOOL as *const _,
+                        size,
+                    );
+                    let _ = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWA_TRANSITIONS_FORCEDISABLED,
+                        &enabled as *const BOOL as *const _,
+                        size,
+                    );
+                }
+            }
 
             let app_handle = app.handle().clone();
 
