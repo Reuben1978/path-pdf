@@ -4,7 +4,8 @@
   import Viewer from "./lib/viewer/Viewer.svelte";
   import PagesPanel from "./lib/panel/PagesPanel.svelte";
   import SignatureLibrary from "./lib/tools/SignatureLibrary.svelte";
-  import { docState } from "./lib/doc-state.svelte";
+  import TabBar from "./lib/tabs/TabBar.svelte";
+  import { docState, tabsState } from "./lib/doc-state.svelte";
   import { takeLaunchFile } from "./lib/ipc";
 
   // How long the branded splash overlay stays up. It's baked into
@@ -36,7 +37,7 @@
     // open. The second process exits immediately; this window gets focused
     // and opens the file instead.
     await listen<string>("open-file", (event) => {
-      docState.open(event.payload);
+      tabsState.openNewTab(event.payload);
     });
 
     // `take_launch_file` requires the Rust-side AppState to be managed,
@@ -54,16 +55,23 @@
       }
     }
     if (launchFile) {
-      await docState.open(launchFile);
+      await tabsState.openNewTab(launchFile);
     }
   });
 </script>
 
 <main>
-  {#if docState.id !== null}
-    <PagesPanel />
-  {/if}
-  <Viewer />
+  <div class="content">
+    {#if tabsState.tabs.length > 0}
+      <TabBar />
+    {/if}
+    <div class="panes">
+      {#if docState.id !== null}
+        <PagesPanel />
+      {/if}
+      <Viewer />
+    </div>
+  </div>
   <SignatureLibrary />
 </main>
 
@@ -71,5 +79,18 @@
   main {
     height: 100vh;
     display: flex;
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .panes {
+    display: flex;
+    min-height: 0;
+    flex: 1;
   }
 </style>

@@ -49,6 +49,13 @@ pub fn open_document(path: PathBuf, app: AppHandle, state: State<AppState>) -> R
     Ok(DocumentInfo { id, page_count, path: path_string })
 }
 
+/// Called when a tab closes, so the document doesn't stay resident (and its
+/// PDFium handle open) for the rest of the process's lifetime.
+#[tauri::command]
+pub fn close_document(id: u32, state: State<AppState>) {
+    state.remove(id);
+}
+
 /// Returns `tauri::ipc::Response` rather than a JSON-serialized struct to avoid
 /// base64-encoding the bitmap (see CLAUDE.md's rendering-path note). Wire
 /// format: u32 width, u32 height, f32 page_width_points, f32 page_height_points

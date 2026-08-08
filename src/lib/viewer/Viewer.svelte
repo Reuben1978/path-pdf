@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { saveDocument, saveDocumentAs } from "../ipc";
-  import { docState } from "../doc-state.svelte";
+  import { docState, tabsState } from "../doc-state.svelte";
   import { listAnnotations, removeAnnotation } from "../tools/typewriter";
   import { viewerState } from "./viewer-state.svelte";
   import PageSlot from "./PageSlot.svelte";
@@ -21,7 +21,7 @@
   async function openFile() {
     const path = await openDialog({ multiple: false, filters: [PDF_FILTER] });
     if (!path) return;
-    await docState.open(path);
+    await tabsState.openNewTab(path);
   }
 
   async function refreshAnnotations() {

@@ -194,6 +194,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::doc::take_launch_file,
             commands::doc::open_document,
+            commands::doc::close_document,
             commands::doc::render_page,
             commands::doc::get_page_sizes,
             commands::pages::list_pages,

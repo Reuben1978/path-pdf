@@ -8,7 +8,7 @@
     setRecentPlacePinned,
     type RecentEntry,
   } from "../ipc";
-  import { docState } from "../doc-state.svelte";
+  import { tabsState } from "../doc-state.svelte";
   import Button from "../components/Button.svelte";
 
   const PDF_FILTER = { name: "PDF", extensions: ["pdf"] };
@@ -34,16 +34,16 @@
 
   async function openFile() {
     const path = await openDialog({ multiple: false, filters: [PDF_FILTER] });
-    if (path) await docState.open(path);
+    if (path) await tabsState.openNewTab(path);
   }
 
   async function openRecentDocument(path: string) {
-    await docState.open(path);
+    await tabsState.openNewTab(path);
   }
 
   async function openRecentPlace(directory: string) {
     const picked = await openDialog({ multiple: false, defaultPath: directory, filters: [PDF_FILTER] });
-    if (picked) await docState.open(picked);
+    if (picked) await tabsState.openNewTab(picked);
   }
 
   async function toggleDocumentPin(entry: RecentEntry) {

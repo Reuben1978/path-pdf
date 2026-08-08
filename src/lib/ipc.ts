@@ -206,6 +206,11 @@ export async function getPageSizes(id: number): Promise<PageSize[]> {
   return invoke<PageSize[]>("get_page_sizes", { id });
 }
 
+/** Frees the document's PDFium handle server-side. Called when a tab closes. */
+export async function closeDocument(id: number): Promise<void> {
+  return invoke("close_document", { id });
+}
+
 /**
  * Checks whether the OS launched this process with a file to open (e.g. the
  * app was set as the default PDF handler and the user double-clicked a

@@ -82,6 +82,16 @@ impl AppState {
         id
     }
 
+    /// Drops the document (freeing its PDFium handle), called when a tab
+    /// closes. Closing an id that's already gone (or never existed) is a
+    /// no-op -- the frontend doesn't need to special-case double-closes.
+    pub fn remove(&self, id: u32) {
+        self.documents
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id);
+    }
+
     /// `f` gets mutable access to both the document and its logical page
     /// order, plus the path it was opened from. Most operations (render,
     /// rotate, reorder, delete) only need an immutable borrow at the Rust
