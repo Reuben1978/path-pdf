@@ -161,6 +161,10 @@ pub fn run() {
             #[cfg(windows)]
             let main_builder = main_builder.drag_and_drop(false);
 
+            // Only read back on Windows (see the DWM block below) -- on
+            // other platforms `main_window` is legitimately unused, which
+            // `-D warnings` would otherwise reject.
+            #[cfg_attr(not(windows), allow(unused_variables))]
             let main_window = main_builder.build().ok();
 
             // Belt-and-suspenders on top of `.theme(Some(Dark))` above: that
