@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use pdfium_render::prelude::Pdfium;
@@ -63,6 +65,35 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
     argv.get(1).map(PathBuf::from).filter(|p| p.exists())
 }
 
+/// Closes the splash screen and reveals the main window, but only once
+/// *both* independent conditions are met: the minimum splash duration has
+/// elapsed (background thread, for branding) and the main window's own
+/// content has actually finished painting (on_page_load, event loop
+/// thread). Showing main before its content is ready reproduces the exact
+/// flash the splash window itself needed the same fix for -- the OS
+/// displays an empty/unpainted frame (briefly revealing the desktop behind
+/// it, then a blank white webview backing) until the first real paint
+/// arrives. Whichever condition finishes second performs the swap;
+/// `swapped` guards against both calling it.
+fn try_swap_splash_for_main(
+    splash: &Option<tauri::WebviewWindow>,
+    main: &tauri::WebviewWindow,
+    min_duration_elapsed: &AtomicBool,
+    main_page_loaded: &AtomicBool,
+    swapped: &AtomicBool,
+) {
+    if !min_duration_elapsed.load(Ordering::SeqCst) || !main_page_loaded.load(Ordering::SeqCst) {
+        return;
+    }
+    if swapped.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(splash) = splash {
+        let _ = splash.close();
+    }
+    let _ = main.show();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -121,8 +152,53 @@ pub fn run() {
             })
             .build()
             .ok();
-            let main = app.get_webview_window("main");
+            // Same reasoning as splash above -- built here rather than
+            // declared in tauri.conf.json so on_page_load can be attached,
+            // and started hidden so it's revealed only once its own content
+            // has actually painted (see try_swap_splash_for_main).
+            let min_duration_elapsed = Arc::new(AtomicBool::new(false));
+            let main_page_loaded = Arc::new(AtomicBool::new(false));
+            let swapped = Arc::new(AtomicBool::new(false));
+
+            let splash_for_main_cb = splash.clone();
+            let min_duration_elapsed_for_cb = min_duration_elapsed.clone();
+            let main_page_loaded_for_cb = main_page_loaded.clone();
+            let swapped_for_cb = swapped.clone();
+
+            let main_builder =
+                tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+                    .title("Path PDF")
+                    .inner_size(1280.0, 800.0)
+                    .resizable(true)
+                    .fullscreen(false)
+                    .maximized(true)
+                    .visible(false);
+            // Windows-only builder method (WebView2-specific) -- disabling
+            // Tauri's native drag-drop handling is required for the app's
+            // own HTML5 drag-and-drop (signature placement) to work on
+            // Windows; WebKitGTK on Linux never needed this.
+            #[cfg(windows)]
+            let main_builder = main_builder.drag_and_drop(false);
+
+            let main = main_builder
+                .on_page_load(move |window, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                        main_page_loaded_for_cb.store(true, Ordering::SeqCst);
+                        try_swap_splash_for_main(
+                            &splash_for_main_cb,
+                            &window,
+                            &min_duration_elapsed_for_cb,
+                            &main_page_loaded_for_cb,
+                            &swapped_for_cb,
+                        );
+                    }
+                })
+                .build()
+                .ok();
+
             let app_handle = app.handle().clone();
+            let splash_for_thread = splash.clone();
+            let main_for_thread = main.clone();
 
             std::thread::spawn(move || {
                 let start = std::time::Instant::now();
@@ -155,11 +231,15 @@ pub fn run() {
                     std::thread::sleep(remaining);
                 }
 
-                if let Some(splash) = splash {
-                    let _ = splash.close();
-                }
-                if let Some(main) = main {
-                    let _ = main.show();
+                min_duration_elapsed.store(true, Ordering::SeqCst);
+                if let Some(main) = &main_for_thread {
+                    try_swap_splash_for_main(
+                        &splash_for_thread,
+                        main,
+                        &min_duration_elapsed,
+                        &main_page_loaded,
+                        &swapped,
+                    );
                 }
             });
 

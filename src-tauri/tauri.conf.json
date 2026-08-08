@@ -10,19 +10,6 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Path PDF",
-        "width": 1280,
-        "height": 800,
-        "resizable": true,
-        "fullscreen": false,
-        "maximized": true,
-        "dragDropEnabled": false,
-        "visible": false
-      }
-    ],
     "security": {
       "csp": null
     }
