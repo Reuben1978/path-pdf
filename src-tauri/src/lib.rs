@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pdfium_render::prelude::Pdfium;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 mod commands;
 mod state;
@@ -68,13 +68,14 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
 /// Closes the splash screen and reveals the main window, but only once
 /// *both* independent conditions are met: the minimum splash duration has
 /// elapsed (background thread, for branding) and the main window's own
-/// content has actually finished painting (on_page_load, event loop
-/// thread). Showing main before its content is ready reproduces the exact
-/// flash the splash window itself needed the same fix for -- the OS
-/// displays an empty/unpainted frame (briefly revealing the desktop behind
-/// it, then a blank white webview backing) until the first real paint
-/// arrives. Whichever condition finishes second performs the swap;
-/// `swapped` guards against both calling it.
+/// content has actually painted a real frame (the frontend's
+/// "frontend-ready" event, see src/app.svelte). Showing main before its
+/// content is ready reproduces the exact flash the splash window itself
+/// needed the same fix for -- the OS displays an empty/unpainted frame
+/// (briefly revealing the desktop behind it, then a blank white webview
+/// backing) until the first real paint arrives. Whichever condition
+/// finishes second performs the swap; `swapped` guards against both
+/// calling it.
 fn try_swap_splash_for_main(
     splash: &Option<tauri::WebviewWindow>,
     main: &tauri::WebviewWindow,
@@ -153,17 +154,23 @@ pub fn run() {
             .build()
             .ok();
             // Same reasoning as splash above -- built here rather than
-            // declared in tauri.conf.json so on_page_load can be attached,
-            // and started hidden so it's revealed only once its own content
-            // has actually painted (see try_swap_splash_for_main).
+            // declared in tauri.conf.json so it can start hidden and only be
+            // revealed once its own content is actually ready (see
+            // try_swap_splash_for_main). Unlike splash's trivial static
+            // HTML, "ready" here is *not* on_page_load(Finished): that event
+            // fires once the webview finishes loading its HTML/JS/CSS
+            // resources, which for a real framework app can fire before
+            // Svelte has actually mounted -- close enough for
+            // splashscreen.html, not for this. Instead the frontend itself
+            // emits "frontend-ready" from onMount (see src/app.svelte),
+            // which main_page_loaded waits on -- NOT gated on
+            // requestAnimationFrame there, since rAF never fires for a
+            // window that's still hidden (no compositor cycle to hook),
+            // which deadlocked startup entirely the first time this was
+            // tried.
             let min_duration_elapsed = Arc::new(AtomicBool::new(false));
             let main_page_loaded = Arc::new(AtomicBool::new(false));
             let swapped = Arc::new(AtomicBool::new(false));
-
-            let splash_for_main_cb = splash.clone();
-            let min_duration_elapsed_for_cb = min_duration_elapsed.clone();
-            let main_page_loaded_for_cb = main_page_loaded.clone();
-            let swapped_for_cb = swapped.clone();
 
             let main_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
@@ -180,21 +187,25 @@ pub fn run() {
             #[cfg(windows)]
             let main_builder = main_builder.drag_and_drop(false);
 
-            let main = main_builder
-                .on_page_load(move |window, payload| {
-                    if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                        main_page_loaded_for_cb.store(true, Ordering::SeqCst);
-                        try_swap_splash_for_main(
-                            &splash_for_main_cb,
-                            &window,
-                            &min_duration_elapsed_for_cb,
-                            &main_page_loaded_for_cb,
-                            &swapped_for_cb,
-                        );
-                    }
-                })
-                .build()
-                .ok();
+            let main = main_builder.build().ok();
+
+            if let Some(main) = &main {
+                let main_for_ready_cb = main.clone();
+                let splash_for_ready_cb = splash.clone();
+                let min_duration_elapsed_for_cb = min_duration_elapsed.clone();
+                let main_page_loaded_for_cb = main_page_loaded.clone();
+                let swapped_for_cb = swapped.clone();
+                main.once("frontend-ready", move |_event| {
+                    main_page_loaded_for_cb.store(true, Ordering::SeqCst);
+                    try_swap_splash_for_main(
+                        &splash_for_ready_cb,
+                        &main_for_ready_cb,
+                        &min_duration_elapsed_for_cb,
+                        &main_page_loaded_for_cb,
+                        &swapped_for_cb,
+                    );
+                });
+            }
 
             let app_handle = app.handle().clone();
             let splash_for_thread = splash.clone();
