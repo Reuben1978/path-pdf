@@ -38,6 +38,10 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
   DeleteRegKey SHCTX "Software\Classes\PathPDF.Document"
-  DeleteRegKey SHCTX "Software\Path PDF\Capabilities"
+  ; Capabilities is the only subkey we ever write under Software\Path PDF;
+  ; DeleteRegKey removes it recursively, so deleting the parent here (rather
+  ; than just \Capabilities) avoids leaving a bare empty "Path PDF" key
+  ; behind after uninstall.
+  DeleteRegKey SHCTX "Software\Path PDF"
   DeleteRegValue SHCTX "Software\RegisteredApplications" "Path PDF"
 !macroend
