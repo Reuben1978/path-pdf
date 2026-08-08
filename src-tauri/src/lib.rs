@@ -65,35 +65,28 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
     argv.get(1).map(PathBuf::from).filter(|p| p.exists())
 }
 
-/// Reveals the main window and dismisses the splash screen, but only once
-/// *both* independent conditions are met: the minimum splash duration has
+/// Dismisses the splash screen, once *both* the minimum splash duration has
 /// elapsed (background thread, for branding) and the frontend has reported
-/// itself mounted ("frontend-ready", see src/app.svelte). Whichever
-/// condition finishes second performs the swap; `swapped` guards against
-/// both calling it.
+/// that it has actually painted pixels ("frontend-painted", see
+/// src/app.svelte). Whichever finishes second performs the dismissal;
+/// `dismissed` guards against both doing it.
 ///
-/// **Order matters here and is the whole point.** Showing main *first*,
-/// while the splash is still up, means there is never an instant with
-/// neither window on screen. Closing the splash first (the obvious
-/// reading of "swap splash for main") leaves exactly such a gap, and the
-/// desktop shows through it -- that gap was visible as a distinct
-/// desktop-wallpaper flash in a user's screen recording. The splash is
-/// always-on-top and main is maximized, so main appearing underneath it is
-/// invisible until the splash goes away a moment later.
-fn try_swap_splash_for_main(
+/// Note this only *closes the splash* -- it does not show main. Main is
+/// already on screen by this point, deliberately: see the comment on the
+/// splash's on_page_load in `run()` for why that ordering is what actually
+/// fixes the startup flash.
+fn try_dismiss_splash(
     splash: &Option<tauri::WebviewWindow>,
-    main: &tauri::WebviewWindow,
     min_duration_elapsed: &AtomicBool,
-    main_page_loaded: &AtomicBool,
-    swapped: &AtomicBool,
+    frontend_painted: &AtomicBool,
+    dismissed: &AtomicBool,
 ) {
-    if !min_duration_elapsed.load(Ordering::SeqCst) || !main_page_loaded.load(Ordering::SeqCst) {
+    if !min_duration_elapsed.load(Ordering::SeqCst) || !frontend_painted.load(Ordering::SeqCst) {
         return;
     }
-    if swapped.swap(true, Ordering::SeqCst) {
+    if dismissed.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = main.show();
     if let Some(splash) = splash {
         let _ = splash.close();
     }
@@ -131,55 +124,13 @@ pub fn run() {
             // window's very first paint. Do it on a background thread instead
             // and let setup() return immediately.
             //
-            // The splash window is built here (rather than declared in
-            // tauri.conf.json) so on_page_load can be attached before the
-            // webview navigates -- that's only available on the builder, not
-            // on an already-created window. It starts hidden and is only
-            // shown once its content has actually finished loading, so the
-            // OS never displays an empty/white frame while the webview is
-            // still painting its first frame.
-            let splash = tauri::WebviewWindowBuilder::new(
-                app,
-                "splashscreen",
-                tauri::WebviewUrl::App("splashscreen.html".into()),
-            )
-            .inner_size(720.0, 720.0)
-            .resizable(false)
-            .decorations(false)
-            .always_on_top(true)
-            .center()
-            .skip_taskbar(true)
-            // Matches splashscreen.html's own black background, for the
-            // same reason as main below: the default is white, which
-            // flashes before the webview composites.
-            .background_color(tauri::window::Color(0x00, 0x00, 0x00, 0xff))
-            .visible(false)
-            .on_page_load(|window, payload| {
-                if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                    let _ = window.show();
-                }
-            })
-            .build()
-            .ok();
-            // Same reasoning as splash above -- built here rather than
-            // declared in tauri.conf.json so it can start hidden and only be
-            // revealed once its own content is actually ready (see
-            // try_swap_splash_for_main). Unlike splash's trivial static
-            // HTML, "ready" here is *not* on_page_load(Finished): that event
-            // fires once the webview finishes loading its HTML/JS/CSS
-            // resources, which for a real framework app can fire before
-            // Svelte has actually mounted -- close enough for
-            // splashscreen.html, not for this. Instead the frontend itself
-            // emits "frontend-ready" from onMount (see src/app.svelte),
-            // which main_page_loaded waits on -- NOT gated on
-            // requestAnimationFrame there, since rAF never fires for a
-            // window that's still hidden (no compositor cycle to hook),
-            // which deadlocked startup entirely the first time this was
-            // tried.
             let min_duration_elapsed = Arc::new(AtomicBool::new(false));
-            let main_page_loaded = Arc::new(AtomicBool::new(false));
-            let swapped = Arc::new(AtomicBool::new(false));
+            let frontend_painted = Arc::new(AtomicBool::new(false));
+            let dismissed = Arc::new(AtomicBool::new(false));
 
+            // Main is built first (so the splash, created after, stacks above
+            // it) and starts hidden. It's shown a moment later, underneath
+            // the splash -- see the splash's on_page_load below.
             let main_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                     .title("Path PDF")
@@ -203,27 +154,76 @@ pub fn run() {
 
             let main = main_builder.build().ok();
 
+            // The splash is built here (rather than declared in
+            // tauri.conf.json) so on_page_load can be attached before the
+            // webview navigates -- only available on the builder, not on an
+            // already-created window.
+            //
+            // When the splash has painted, it shows itself AND shows main
+            // underneath it. That ordering is the fix for the startup flash,
+            // and it took three wrong attempts to get right, so: a webview
+            // does not render while its window is hidden. So "wait until
+            // main has painted, then show main" is circular -- it can never
+            // paint, and every variation of that produced either a blank
+            // window flash or (when gated on requestAnimationFrame) a
+            // permanent deadlock. Main must be on screen to paint at all.
+            // Putting it on screen *behind* the always-on-top splash lets it
+            // paint during the splash's minimum display time, so by the time
+            // the splash closes there is a fully-drawn window underneath and
+            // nothing to flash. It also means the swap involves no show()
+            // at all -- only the splash closing -- so there is no instant
+            // where neither window covers the screen.
+            let splash = {
+                let main_for_splash_cb = main.clone();
+                tauri::WebviewWindowBuilder::new(
+                    app,
+                    "splashscreen",
+                    tauri::WebviewUrl::App("splashscreen.html".into()),
+                )
+                .inner_size(720.0, 720.0)
+                .resizable(false)
+                .decorations(false)
+                .always_on_top(true)
+                .center()
+                .skip_taskbar(true)
+                // Matches splashscreen.html's own black background, same
+                // reason as main above: the default is white.
+                .background_color(tauri::window::Color(0x00, 0x00, 0x00, 0xff))
+                .visible(false)
+                .on_page_load(move |window, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                        let _ = window.show();
+                        if let Some(main) = &main_for_splash_cb {
+                            let _ = main.show();
+                            // Keep the splash above main -- main was just
+                            // mapped, which can raise it above the splash
+                            // depending on the window manager.
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build()
+                .ok()
+            };
+
             if let Some(main) = &main {
-                let main_for_ready_cb = main.clone();
-                let splash_for_ready_cb = splash.clone();
+                let splash_for_cb = splash.clone();
                 let min_duration_elapsed_for_cb = min_duration_elapsed.clone();
-                let main_page_loaded_for_cb = main_page_loaded.clone();
-                let swapped_for_cb = swapped.clone();
-                main.once("frontend-ready", move |_event| {
-                    main_page_loaded_for_cb.store(true, Ordering::SeqCst);
-                    try_swap_splash_for_main(
-                        &splash_for_ready_cb,
-                        &main_for_ready_cb,
+                let frontend_painted_for_cb = frontend_painted.clone();
+                let dismissed_for_cb = dismissed.clone();
+                main.once("frontend-painted", move |_event| {
+                    frontend_painted_for_cb.store(true, Ordering::SeqCst);
+                    try_dismiss_splash(
+                        &splash_for_cb,
                         &min_duration_elapsed_for_cb,
-                        &main_page_loaded_for_cb,
-                        &swapped_for_cb,
+                        &frontend_painted_for_cb,
+                        &dismissed_for_cb,
                     );
                 });
             }
 
             let app_handle = app.handle().clone();
             let splash_for_thread = splash.clone();
-            let main_for_thread = main.clone();
 
             std::thread::spawn(move || {
                 let start = std::time::Instant::now();
@@ -257,15 +257,12 @@ pub fn run() {
                 }
 
                 min_duration_elapsed.store(true, Ordering::SeqCst);
-                if let Some(main) = &main_for_thread {
-                    try_swap_splash_for_main(
-                        &splash_for_thread,
-                        main,
-                        &min_duration_elapsed,
-                        &main_page_loaded,
-                        &swapped,
-                    );
-                }
+                try_dismiss_splash(
+                    &splash_for_thread,
+                    &min_duration_elapsed,
+                    &frontend_painted,
+                    &dismissed,
+                );
             });
 
             Ok(())

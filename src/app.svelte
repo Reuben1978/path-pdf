@@ -7,23 +7,40 @@
   import { docState } from "./lib/doc-state.svelte";
   import { takeLaunchFile } from "./lib/ipc";
 
+  // Resolves once the browser has actually committed a paint. A single
+  // requestAnimationFrame only promises "before the next paint", so it can
+  // still run ahead of the paint that makes this frame's DOM visible; two
+  // nested calls land after it.
+  //
+  // The timeout is not decoration. rAF does not fire while a window is
+  // hidden, and an earlier version of this waited on rAF before the window
+  // was ever shown -- which deadlocked startup permanently, since the app
+  // then never signalled that it was safe to reveal it. This window *is*
+  // shown before this runs now (Rust shows it behind the splash, see
+  // lib.rs), so rAF should fire promptly -- but startup must never again
+  // be able to hang on a frame that doesn't arrive.
+  function waitForPaint(timeoutMs = 2000): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      requestAnimationFrame(() => requestAnimationFrame(finish));
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
   onMount(async () => {
-    // Tells the Rust side it's now safe to show this window -- see the
-    // "frontend-ready" listener in lib.rs. Deliberately not based on
-    // Tauri's on_page_load(Finished): that fires once the webview finishes
-    // loading its HTML/JS/CSS, which can happen before Svelte has actually
-    // mounted -- reaching onMount at all already means the DOM has been
-    // built, a strictly later and more accurate point.
-    //
-    // Deliberately NOT gated on requestAnimationFrame either, despite that
-    // being the usual way to wait for a confirmed paint: this window is
-    // still hidden at this point (Rust shows it only after this signal),
-    // and rAF callbacks never fire for a window that was never shown --
-    // there's no compositor paint cycle to hook for something the OS isn't
-    // presenting. Waiting on it here deadlocked the whole startup
-    // permanently (found by testing, not by inspection -- the window
-    // simply never appeared).
-    await emit("frontend-ready");
+    // Tells the Rust side the window has real content on it, so the splash
+    // covering it can be dismissed -- see the "frontend-painted" listener
+    // in lib.rs. Deliberately not Tauri's on_page_load(Finished), which
+    // fires once the webview has loaded HTML/JS/CSS and can precede Svelte
+    // mounting anything; and deliberately after a confirmed paint rather
+    // than merely at mount, because mount only means the DOM exists, not
+    // that pixels have been drawn.
+    waitForPaint().then(() => emit("frontend-painted"));
 
     // Register this before the launch-file work below, and unconditionally.
     // Tauri's emit() doesn't buffer events for listeners that don't exist
