@@ -65,17 +65,21 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
     argv.get(1).map(PathBuf::from).filter(|p| p.exists())
 }
 
-/// Closes the splash screen and reveals the main window, but only once
+/// Reveals the main window and dismisses the splash screen, but only once
 /// *both* independent conditions are met: the minimum splash duration has
-/// elapsed (background thread, for branding) and the main window's own
-/// content has actually painted a real frame (the frontend's
-/// "frontend-ready" event, see src/app.svelte). Showing main before its
-/// content is ready reproduces the exact flash the splash window itself
-/// needed the same fix for -- the OS displays an empty/unpainted frame
-/// (briefly revealing the desktop behind it, then a blank white webview
-/// backing) until the first real paint arrives. Whichever condition
-/// finishes second performs the swap; `swapped` guards against both
-/// calling it.
+/// elapsed (background thread, for branding) and the frontend has reported
+/// itself mounted ("frontend-ready", see src/app.svelte). Whichever
+/// condition finishes second performs the swap; `swapped` guards against
+/// both calling it.
+///
+/// **Order matters here and is the whole point.** Showing main *first*,
+/// while the splash is still up, means there is never an instant with
+/// neither window on screen. Closing the splash first (the obvious
+/// reading of "swap splash for main") leaves exactly such a gap, and the
+/// desktop shows through it -- that gap was visible as a distinct
+/// desktop-wallpaper flash in a user's screen recording. The splash is
+/// always-on-top and main is maximized, so main appearing underneath it is
+/// invisible until the splash goes away a moment later.
 fn try_swap_splash_for_main(
     splash: &Option<tauri::WebviewWindow>,
     main: &tauri::WebviewWindow,
@@ -89,10 +93,10 @@ fn try_swap_splash_for_main(
     if swapped.swap(true, Ordering::SeqCst) {
         return;
     }
+    let _ = main.show();
     if let Some(splash) = splash {
         let _ = splash.close();
     }
-    let _ = main.show();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -145,6 +149,10 @@ pub fn run() {
             .always_on_top(true)
             .center()
             .skip_taskbar(true)
+            // Matches splashscreen.html's own black background, for the
+            // same reason as main below: the default is white, which
+            // flashes before the webview composites.
+            .background_color(tauri::window::Color(0x00, 0x00, 0x00, 0xff))
             .visible(false)
             .on_page_load(|window, payload| {
                 if payload.event() == tauri::webview::PageLoadEvent::Finished {
@@ -179,6 +187,12 @@ pub fn run() {
                     .resizable(true)
                     .fullscreen(false)
                     .maximized(true)
+                    // --color-bg from src/app.css. Without this both the
+                    // window and webview default to white, so any frame
+                    // rendered before the webview composites its content
+                    // flashes white against this app's dark UI. Keep in
+                    // sync with app.css.
+                    .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff))
                     .visible(false);
             // Windows-only builder method (WebView2-specific) -- disabling
             // Tauri's native drag-drop handling is required for the app's
