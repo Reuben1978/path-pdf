@@ -181,6 +181,19 @@ These are requirements, not aspirations. Regressions here are bugs.
 - Release binary: under 20MB excluding PDFium.
 - Idle memory with a 100-page document open: under 300MB.
 
+## Known issues
+
+**Webview lays out narrower than the window (Linux dev box).** On this dev machine the
+webview's content area measures ~1440px wide inside a 1920px window — roughly a 480px
+strip on the right that never paints. It's currently invisible because the window and
+webview background colors are made to match (see `background_color()` in `lib.rs`), but
+the app is not actually using the full window width. Also caused CSS viewport units
+(`vw`, `vh`, `vmin`) and `position: fixed; inset: 0` to measure wrong during the splash
+overlay work (see git history around the splash-overlay commits) — normal-flow percentage
+sizing (`width: 100%` with `height: 100%` ancestors) was the only approach that filled the
+window correctly. Not yet root-caused; worth investigating on its own rather than routing
+around it again. Check whether it reproduces on Windows before assuming it's Linux/WebKitGTK-specific.
+
 ## License
 
 MIT. Keep it that way — check any new dependency's license before adding it, and flag
