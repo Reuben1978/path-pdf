@@ -126,6 +126,20 @@ pub fn run() {
                     .fullscreen(false)
                     .maximized(true)
                     .visible(false)
+                    // App UI is dark (see --color-bg below), but window
+                    // decorations otherwise default to the OS theme. On
+                    // Windows that's light unless the system itself is in
+                    // dark mode, which produces a white/light native
+                    // titlebar sitting on top of the dark webview for the
+                    // whole time the window is up -- suspected cause of the
+                    // startup "bar at the top" flash reported on Windows
+                    // (not reproduced on Linux, where the window manager's
+                    // own theme happens to already be dark on the dev box).
+                    // Forcing dark here removes the mismatch regardless of
+                    // OS theme. Unverified against the actual Windows repro
+                    // as of this commit -- see CLAUDE.md in the VM Share
+                    // folder for the collaboration/verification thread.
+                    .theme(Some(tauri::Theme::Dark))
                     // --color-bg from app.css, matching both the splash
                     // overlay in index.html and the app UI underneath it.
                     // Without this the window and webview default to white
