@@ -105,8 +105,19 @@ pub fn run() {
             // the splash as static markup, so this window's *first* painted
             // frame is already the branded splash, and the frontend removes
             // that overlay once the app underneath is ready (app.svelte).
-            // The window is visible from the start; there is no hidden
-            // phase and nothing to swap.
+            // Built hidden and revealed once its document has loaded, for
+            // one specific reason: `inner_size` is the *restore* size, and
+            // the window manager maps the window at that size and draws its
+            // frame there before applying `maximized`. Mapped-and-visible
+            // during that step, it drew a thin bright outline of the
+            // un-maximized window over the desktop -- an L-shaped line, for
+            // a frame or two, before anything else appeared. Staying hidden
+            // until after that means the window is only ever seen already
+            // maximized. This is *not* the "hide until painted" approach
+            // that failed before: the first frame is the splash overlay in
+            // index.html (static markup, no framework needed), and the
+            // background colour below matches it, so there is nothing blank
+            // to see even if the reveal lands a frame early.
             let main_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                     .title("Path PDF")
@@ -114,6 +125,7 @@ pub fn run() {
                     .resizable(true)
                     .fullscreen(false)
                     .maximized(true)
+                    .visible(false)
                     // --color-bg from app.css, matching both the splash
                     // overlay in index.html and the app UI underneath it.
                     // Without this the window and webview default to white
@@ -122,7 +134,12 @@ pub fn run() {
                     // out narrower than the window (~1440px in a 1920px
                     // window), leaving a strip the webview never paints --
                     // matching this colour keeps that strip invisible.
-                    .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff));
+                    .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff))
+                    .on_page_load(|window, payload| {
+                        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                            let _ = window.show();
+                        }
+                    });
             // Windows-only builder method (WebView2-specific) -- disabling
             // Tauri's native drag-drop handling is required for the app's
             // own HTML5 drag-and-drop (signature placement) to work on
