@@ -62,6 +62,80 @@ fn file_arg_from(argv: &[String]) -> Option<PathBuf> {
     argv.get(1).map(PathBuf::from).filter(|p| p.exists())
 }
 
+/// Shows `window` without going through the classic Win32
+/// minimize/maximize zoom animation. tao's `WindowState::apply_diff`
+/// (`window_state.rs`) unconditionally issues `ShowWindow(hwnd,
+/// SW_MAXIMIZE)` whenever a window's flags already include `MAXIMIZED` and
+/// its `VISIBLE` flag is changing -- exactly this window's case, since it's
+/// built `.maximized(true).visible(false)` in `run()` and revealed later
+/// via this call. That animation is governed by `SPI_SETANIMATION`
+/// ("Animate windows when minimizing or maximizing"), a wholly separate
+/// mechanism from `DWMWA_TRANSITIONS_FORCEDISABLED` (set on the raw HWND
+/// during setup, which only covers DWM's own composited window-open
+/// transition) -- the likely reason that fix alone didn't close out the
+/// residual startup flash (see CLAUDE.md in the VM Share folder). Rather
+/// than changing the user's OS-wide animation preference, this disables it
+/// only around the one `show()` call that would trigger it, then restores
+/// whatever was there before.
+#[cfg(windows)]
+fn show_without_maximize_animation<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, ANIMATIONINFO, SPI_GETANIMATION, SPI_SETANIMATION,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+
+    let mut info = ANIMATIONINFO {
+        cbSize: std::mem::size_of::<ANIMATIONINFO>() as u32,
+        iMinAnimate: 0,
+    };
+    let size = info.cbSize;
+    // SAFETY: `info` is a live, correctly-sized ANIMATIONINFO for the
+    // duration of the call.
+    let got_original = unsafe {
+        SystemParametersInfoW(
+            SPI_GETANIMATION,
+            size,
+            Some(&mut info as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok();
+
+    if !got_original || info.iMinAnimate == 0 {
+        // Already disabled system-wide, or couldn't read it -- nothing to
+        // toggle either way.
+        let _ = window.show();
+        return;
+    }
+
+    let original_value = info.iMinAnimate;
+    let mut disabled = info;
+    disabled.iMinAnimate = 0;
+    // SAFETY: same as above.
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_SETANIMATION,
+            size,
+            Some(&mut disabled as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+
+    let _ = window.show();
+
+    let mut restored = info;
+    restored.iMinAnimate = original_value;
+    // SAFETY: same as above.
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_SETANIMATION,
+            size,
+            Some(&mut restored as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -151,7 +225,12 @@ pub fn run() {
                     .background_color(tauri::window::Color(0x17, 0x15, 0x1d, 0xff))
                     .on_page_load(|window, payload| {
                         if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                            let _ = window.show();
+                            #[cfg(windows)]
+                            show_without_maximize_animation(&window);
+                            #[cfg(not(windows))]
+                            {
+                                let _ = window.show();
+                            }
                         }
                     });
             // Windows-only builder method (WebView2-specific) -- disabling
@@ -203,19 +282,46 @@ pub fn run() {
                 // SAFETY: `hwnd` is a live window handle just returned by
                 // `build()` above; `enabled` outlives both calls and its
                 // size matches `size` exactly.
-                unsafe {
-                    let _ = DwmSetWindowAttribute(
+                let (dark_mode_result, transitions_result) = unsafe {
+                    let dark_mode_result = DwmSetWindowAttribute(
                         hwnd,
                         DWMWA_USE_IMMERSIVE_DARK_MODE,
                         &enabled as *const BOOL as *const _,
                         size,
                     );
-                    let _ = DwmSetWindowAttribute(
+                    let transitions_result = DwmSetWindowAttribute(
                         hwnd,
                         DWMWA_TRANSITIONS_FORCEDISABLED,
                         &enabled as *const BOOL as *const _,
                         size,
                     );
+                    (dark_mode_result, transitions_result)
+                };
+                // Diagnostic for the residual-flash investigation in
+                // CLAUDE.md (VM Share folder): both calls used to discard
+                // their HRESULT via `let _ =`, so a silent failure here
+                // (e.g. DWMWA_TRANSITIONS_FORCEDISABLED not honored under
+                // this VM's virtualized display driver) would look
+                // identical to a successful-but-ineffective call. Logged
+                // only to a file, not `eprintln!` -- release builds run
+                // with `windows_subsystem = "windows"`, so there's no
+                // console attached when launched normally (e.g. from the
+                // desktop shortcut), and `eprintln!` panics if the write to
+                // a nonexistent stderr handle fails, which would abort this
+                // whole block before the file write below ever runs.
+                let log_line = format!(
+                    "[{:?}] DWMWA_USE_IMMERSIVE_DARK_MODE: {:?}, DWMWA_TRANSITIONS_FORCEDISABLED: {:?}\n",
+                    std::time::SystemTime::now(),
+                    dark_mode_result,
+                    transitions_result,
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(std::env::temp_dir().join("path-pdf-dwm-debug.log"))
+                {
+                    use std::io::Write;
+                    let _ = f.write_all(log_line.as_bytes());
                 }
             }
 
