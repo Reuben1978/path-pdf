@@ -198,7 +198,7 @@
   {:else}
     <div class="canvas-scroll" bind:this={scrollContainer} onwheel={onWheel}>
       <div class="page-stack" style:zoom={viewerState.zoom}>
-        {#each docState.pageSizes as size, i (i)}
+        {#each docState.pageSizes as size, i (`${docState.id}-${i}`)}
           <PageSlot pageIndex={i} widthPoints={size.widthPoints} heightPoints={size.heightPoints} />
         {/each}
       </div>

@@ -12,6 +12,17 @@
   let busy = $state(false);
   let extractStatus = $state<string | null>(null);
 
+  // `thumbnails` is keyed by page index, not by document -- switching tabs
+  // (docState.id changes) still has page index 0, 1, 2... in the new
+  // document, so without this, loadThumbnail's `thumbnails[index]` cache
+  // check would keep showing the *previous* tab's thumbnail bitmaps instead
+  // of loading the new document's. Same underlying issue as Viewer.svelte's
+  // PageSlot keying, just a second, separate cache.
+  $effect(() => {
+    docState.id;
+    thumbnails = {};
+  });
+
   function toggleSelect(index: number, event: MouseEvent) {
     if (event.shiftKey && selected.size > 0) {
       const last = Math.max(...selected);
@@ -166,7 +177,7 @@
   {/if}
 
   <div class="pages-list">
-    {#each docState.pages as page (page.logicalIndex)}
+    {#each docState.pages as page (`${docState.id}-${page.logicalIndex}`)}
       <div
         class="thumb"
         class:selected={selected.has(page.logicalIndex)}
